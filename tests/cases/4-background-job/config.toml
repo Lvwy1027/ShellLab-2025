@@ -11,6 +11,10 @@ args = ["-p"]
 mode = "interactive"
 timeout = 30.0
 
+[run.reference]
+command = "${root_dir}/tshref"
+args = ["-p"]
+
 # Echo the command that will be executed (this simulates what sdriver does)
 [[run.steps]]
 type = "input"

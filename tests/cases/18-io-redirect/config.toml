@@ -11,6 +11,10 @@ args = ["-p"]
 mode = "interactive"
 timeout = 30.0
 
+[run.reference]
+command = "${root_dir}/tshref"
+args = ["-p"]
+
 # 测试输出重定向
 [[run.steps]]
 type = "input"

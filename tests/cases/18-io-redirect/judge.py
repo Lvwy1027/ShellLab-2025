@@ -1,5 +1,4 @@
 import json
-import re
 import sys
 
 
@@ -9,84 +8,94 @@ def judge():
     stdout = input_data["stdout"]
     max_score = input_data["max_score"]
 
-    # 定义要检查的关键模式
-    # 1. 输出重定向：应该能看到 "Hello, World!" 被正确输出
-    # 2. 输入重定向：应该能看到 "Test input redirection" 被正确读取
-    key_patterns = [r"Hello, World!", r"Test input redirection"]
+    prompt = "> "
+    success = True
+    message_parts = []
+    score = 0
 
-    # 查找 shell 提示符模式，以便正确识别命令输出
-    prompt_pattern = r"[\w\d\-_]+[@:][\w\d\-_/]+[#$%>]"
-    prompt_matches = re.findall(prompt_pattern, stdout)
-    prompt = None
-    if prompt_matches:
-        # 使用最常见的提示符
-        from collections import Counter
+    # 分析输出，查找命令和它们的输出
+    commands_with_output = []
 
-        prompt = Counter(prompt_matches).most_common(1)[0][0]
+    # 使用提示符分割输出
+    lines = stdout.split("\n")
+    prompt_line_indices = []
 
-    # 检查每个模式
-    missing_patterns = []
-    for i, pattern in enumerate(key_patterns):
-        if not re.search(pattern, stdout, re.MULTILINE):
-            missing_patterns.append(f"Pattern {i + 1}: {pattern}")
+    # 找出所有提示符所在行的索引
+    for i, line in enumerate(lines):
+        if line.startswith(prompt.strip()):
+            prompt_line_indices.append(i)
 
-    # 检查是否有错误信息
-    error_patterns = [
-        r"[Ee]rror",
-        r"[Ff]ailed",
-        r"[Cc]annot",
-        r"[Nn]o such file",
-        r"[Pp]ermission denied",
-    ]
+    # 解析每个命令和它的输出
+    for i, prompt_index in enumerate(prompt_line_indices):
+        # 获取命令
+        cmd_line = lines[prompt_index]
+        cmd = cmd_line[len(prompt.strip()) :].strip()
 
-    errors_found = []
-    for pattern in error_patterns:
-        matches = re.findall(pattern, stdout, re.MULTILINE | re.IGNORECASE)
-        if matches:
-            # 过滤掉可能在命令中包含的错误词（如 echo "Error message"）
-            # 只考虑在提示符后出现的错误
-            if prompt:
-                real_errors = []
-                for match in matches:
-                    # 查找匹配项前面最近的提示符
-                    match_pos = stdout.find(match)
-                    last_prompt_pos = stdout.rfind(prompt, 0, match_pos)
-                    if last_prompt_pos != -1:
-                        command_line = stdout[last_prompt_pos:match_pos].strip()
-                        # 如果错误不是命令的一部分，则认为是真正的错误
-                        if not (("echo" in command_line) and (match in command_line)):
-                            real_errors.append(match)
-                if real_errors:
-                    errors_found.append(f"Error pattern: {pattern}")
-            else:
-                errors_found.append(f"Error pattern: {pattern}")
+        # 获取输出: 从命令行的下一行开始，到下一个提示符行（或文件结束）
+        output_start = prompt_index + 1
+        output_end = (
+            prompt_line_indices[i + 1]
+            if i + 1 < len(prompt_line_indices)
+            else len(lines)
+        )
 
-    # 计算得分和状态
-    if not missing_patterns and not errors_found:
-        success = True
-        message = "All I/O redirection tests passed successfully"
-        score = max_score
+        # 如果没有输出行或者下一行就是提示符，则输出为空
+        if output_start >= output_end:
+            output = ""
+        else:
+            output = "\n".join(lines[output_start:output_end])
+
+        commands_with_output.append((cmd, output))
+
+    # 检查重定向测试
+    output_redirection_success = False
+    input_redirection_success = False
+
+    for cmd, output in commands_with_output:
+        # 检查输出重定向测试
+        if "cat output.txt" in cmd:
+            # 输出应该包含 "Hello, World!"
+            if "Hello, World!" in output:
+                output_redirection_success = True
+
+        # 检查输入重定向测试
+        if "cat < input.txt" in cmd:
+            # 输出应该包含 "Test input redirection"
+            if "Test input redirection" in output:
+                input_redirection_success = True
+
+    # 评估测试结果
+    if output_redirection_success:
+        message_parts.append("Output redirection test passed")
     else:
         success = False
-        message_parts = []
-        if missing_patterns:
-            message_parts.append(
-                f"Missing expected output: {', '.join(missing_patterns)}"
-            )
-        if errors_found:
-            message_parts.append(f"Errors detected: {', '.join(errors_found)}")
-        message = "; ".join(message_parts)
-
-        # 根据通过的测试数量计算部分分数
-        total_checks = len(key_patterns) + (1 if errors_found else 0)
-        passed_checks = (
-            len(key_patterns) - len(missing_patterns) + (0 if errors_found else 1)
+        message_parts.append(
+            "Output redirection test failed: Failed to correctly write to or read from output.txt"
         )
-        score = max_score * (passed_checks / total_checks)
+
+    if input_redirection_success:
+        message_parts.append("Input redirection test passed")
+    else:
+        success = False
+        message_parts.append(
+            "Input redirection test failed: Failed to correctly read input from input.txt"
+        )
+
+    message = "; ".join(message_parts)
+
+    # 计算得分
+    if success:
+        score = max_score
+    else:
+        # 根据通过的测试计算部分分数
+        passed_tests = (1 if output_redirection_success else 0) + (
+            1 if input_redirection_success else 0
+        )
+        total_tests = 2
+        score = max_score * (passed_tests / total_tests)
 
     # 返回结果
     result = {"success": success, "message": message, "score": score}
-
     print(json.dumps(result))
 
 

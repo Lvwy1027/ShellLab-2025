@@ -1,4 +1,5 @@
 import argparse
+import difflib
 import io
 import json
 import os
@@ -545,8 +546,6 @@ class SequenceChecker:
         返回:
             匹配结束的位置，未找到则返回-1
         """
-        import re
-
         if regex_mode:
             match = re.search(pattern, text[start_pos:])
             if match:
@@ -574,8 +573,6 @@ class SequenceChecker:
         返回:
             (是否全部匹配成功, 最后匹配位置, 匹配的模式数量, 匹配的权重总和)
         """
-        import re
-
         # 转换模式格式和提取权重
         processed_patterns = []
         for p in patterns:
@@ -899,6 +896,7 @@ class TestRunner:
         verbose: bool = False,
         dry_run: bool = False,
         no_check: bool = False,
+        compare: bool = False,
     ):
         self.config = config
         self.console = console
@@ -906,6 +904,7 @@ class TestRunner:
         self.verbose = verbose
         self.dry_run = dry_run
         self.no_check = no_check
+        self.compare = compare
 
     def run_test(self, test: TestCase) -> TestResult:
         start_time = time.perf_counter()
@@ -1025,6 +1024,7 @@ class TestRunner:
             else test.meta["score"]
         )
         steps_error_details = []
+        test_success = True
 
         for i, step in enumerate(test.run_steps, 1):
             if progress is not None and task is not None:
@@ -1036,25 +1036,19 @@ class TestRunner:
                 )
 
             result = self._execute_single_step(test, step, i)
+
+            # 收集结果信息，无论成功或失败
             if not result.success and not self.dry_run:
                 steps_error_details.append(result.error_details)
-                if progress is not None and task is not None:
-                    progress.update(task, completed=i)
                 if step.get("must_pass", True):
-                    # 返回包含所有已收集的错误详情的结果
-                    return TestResult(
-                        success=False,
-                        message=result.message,
-                        time=time.perf_counter() - start_time,
-                        score=total_score,
-                        max_score=max_possible_score,
-                        step_scores=step_scores,
-                        error_details=steps_error_details,
-                    )
+                    test_success = False
+
+            # 更新分数信息
             total_score += result.score
             if result.step_scores:
                 step_scores.extend(result.step_scores)
 
+            # 更新进度
             if progress is not None and task is not None:
                 progress.update(
                     task,
@@ -1062,19 +1056,24 @@ class TestRunner:
                     completed=i,
                 )
 
+            # 如果步骤失败且必须通过，但继续执行剩余步骤以便verbose模式显示
+            if not result.success and step.get("must_pass", True) and not test_success:
+                # 不提前返回，继续执行后续步骤，但标记测试已失败
+                continue
+
         # 如果有分步给分，确保总分不超过测试用例的总分
         if has_step_scores:
             total_score = min(total_score, test.meta["score"])
         else:
-            total_score = test.meta["score"]
+            total_score = test.meta["score"] if test_success else 0
             step_scores = None
 
-        success = True if self.dry_run else total_score > 0
+        success = True if self.dry_run else (test_success and total_score > 0)
         return TestResult(
             success=success,
             message="All steps completed" if success else "Some steps failed",
             time=time.perf_counter() - start_time,
-            score=total_score,
+            score=total_score if success else 0,
             max_score=max_possible_score,
             step_scores=step_scores,
             error_details=steps_error_details if steps_error_details else None,
@@ -1083,7 +1082,7 @@ class TestRunner:
     def _execute_interactive_mode(
         self, test: TestCase, step: Dict[str, Any], step_index: int
     ) -> TestResult:
-        """执行交互式模式测试"""
+        """执行交互式模式测试，可选择与参考实现比较"""
         start_time = time.perf_counter()
         pwd = test.path
         if "pwd" in step:
@@ -1095,181 +1094,90 @@ class TestRunner:
             self._resolve_path(str(arg), test.path, pwd) for arg in step.get("args", [])
         ]
 
-        # 创建交互式进程
-        interactive_process = InteractiveProcess(
-            cmd + args,
-            cwd=str(pwd),
-            timeout=step.get("timeout", 30.0),
-            stderr_to_stdout=step.get("stderr_to_stdout", False),
+        # 在dry-run模式下，只打印命令和交互步骤
+        if self.dry_run:
+            return self._handle_dry_run_interactive(
+                test, step, step_index, start_time, pwd, cmd, args
+            )
+
+        # 创建并启动交互进程
+        interactive_process, ref_process = self._create_interactive_processes(
+            test, step, pwd, cmd, args
         )
 
         try:
+            # 启动进程
             interactive_process.start()
+            if ref_process:
+                ref_process.start()
 
-            # 执行交互步骤
-            step_scores = []
-            total_score = 0
-            max_score = 0
-            previous_step_type = ""
+            # 执行交互步骤并获取结果
+            execution_result = self._execute_interactive_steps(
+                test,
+                step,
+                step_index,
+                start_time,
+                interactive_process,
+                ref_process,
+                cmd,
+                args,
+            )
 
-            for i, interaction_step in enumerate(step.get("steps", []), 1):
-                step_type = interaction_step.get("type", "")
+            if self.verbose and self.console and not isinstance(self.console, type):
+                self.console.print("[bold cyan]Interactive test finished[/bold cyan]")
+                interactive_process.print_verbose(self.console)
+                if ref_process:
+                    self.console.print("[bold]Reference program output:[/bold]")
+                    ref_process.print_verbose(self.console)
 
-                # 检查超时
-                if interactive_process.check_timeout():
-                    return TestResult(
-                        success=False,
-                        message=f"Interactive process timed out after {step.get('timeout', 30.0)}s",
-                        time=time.perf_counter() - start_time,
-                        score=total_score,
-                        max_score=step.get("score", test.meta["score"]),
-                        step_scores=step_scores,
-                        error_details={
-                            "step": step_index,
-                            "step_name": step.get("name", step["command"]),
-                            "error_message": "Process timed out",
-                            "command": " ".join(cmd + args),
-                        },
-                    )
-
-                # 处理不同类型的交互步骤
-                if step_type == "input":
-                    echo = interaction_step.get("echo", True)
-                    wait_for_output = interaction_step.get("wait_for_output", True)
-
-                    if i > 0 and previous_step_type in ["signal", "sleep"]:
-                        time.sleep(0.2)
-
-                    interactive_process.send_input(
-                        interaction_step.get("content", ""),
-                        echo=echo,
-                        wait_for_output=wait_for_output,
-                    )
-
-                elif step_type == "close":
-                    interactive_process.close_input()
-
-                elif step_type == "wait":
-                    # 等待进程终止
-                    wait_timeout = interaction_step.get("timeout", 5.0)
-                    exit_code = interactive_process.wait(wait_timeout)
-
-                    if exit_code is None:  # 超时未终止
-                        if interaction_step.get("must_terminate", True):
-                            return TestResult(
-                                success=False,
-                                message=f"Process did not terminate within {wait_timeout}s after wait command",
-                                time=time.perf_counter() - start_time,
-                                score=total_score,
-                                max_score=step.get("score", test.meta["score"]),
-                                step_scores=step_scores,
-                                error_details={
-                                    "step": step_index,
-                                    "step_name": step.get("name", step["command"]),
-                                    "error_message": "Process did not terminate within timeout",
-                                    "command": " ".join(cmd + args),
-                                },
-                            )
-
-                elif step_type == "sleep":
-                    # 睡眠指定时间
-                    time.sleep(interaction_step.get("seconds", 1.0))
-
-                elif step_type == "signal":
-                    # 发送信号
-                    interactive_process.send_signal(
-                        interaction_step.get("signal", "INT")
-                    )
-
-                elif step_type == "check":
-                    # 检查输出
-                    stdout, stderr = interactive_process.get_outputs()
-
-                    step_success, message, step_score = self._check_interactive_output(
-                        interaction_step, stdout, stderr, test.path
-                    )
-
-                    step_max_score = interaction_step.get("score", 0)
-                    max_score += step_max_score
-
-                    if step_score is not None:
-                        total_score += step_score
-                        step_scores.append(
-                            (f"Interactive step {i}", step_score, step_max_score)
+            if (
+                self.compare
+                and ref_process
+                and hasattr(self, "diff_results")
+                and self.diff_results
+                and len(self.diff_results) > 0
+            ):
+                if self.console and not isinstance(self.console, type):
+                    has_diff = any(not diff["match"] for diff in self.diff_results)
+                    if has_diff:
+                        self._print_diff_results(
+                            self.diff_results, len(self.diff_results)
+                        )
+                    else:
+                        self.console.print(
+                            "\n[bold green]All outputs match with reference implementation[/bold green]"
                         )
 
-                    if not step_success and interaction_step.get("must_pass", True):
-                        interactive_process.terminate()
-
-                        if (
-                            self.verbose
-                            and self.console
-                            and not isinstance(self.console, type)
-                        ):
-                            self.console.print(
-                                "[bold cyan]Interactive test completed successfully[/bold cyan]"
-                            )
-                            interactive_process.print_verbose(self.console)
-
-                        return TestResult(
-                            success=False,
-                            message=f"Interactive step {i} failed: {message}",
-                            time=time.perf_counter() - start_time,
-                            score=total_score,
-                            max_score=max_score
-                            if max_score > 0
-                            else step.get("score", test.meta["score"]),
-                            step_scores=step_scores,
-                            error_details={
-                                "step": step_index,
-                                "step_name": step.get("name", step["command"]),
-                                "error_message": message,
-                                "command": " ".join(cmd + args),
-                            },
-                        )
-
-                    # 检查完成后是否需要清除缓冲区
-                    if step.get("clear_buffer", False) and interactive_process:
-                        # 清除输出缓冲区
-                        with interactive_process.output_lock:
-                            interactive_process.stdout_buffer = io.StringIO()
-                            interactive_process.stderr_buffer = io.StringIO()
-                            interactive_process.stdout_data = ""
-                            interactive_process.stderr_data = ""
-                            if self.verbose:
-                                print(f"Buffer cleared after check step {step_index}")
-
-                previous_step_type = step_type
+            if execution_result:
+                return execution_result
 
             # 确保进程终止
             interactive_process.terminate()
-
-            if self.verbose and self.console and not isinstance(self.console, type):
-                self.console.print(
-                    "[bold cyan]Interactive test completed successfully[/bold cyan]"
-                )
-                interactive_process.print_verbose(self.console)
+            if ref_process:
+                ref_process.terminate()
 
             # 如果没有分步评分，使用整体分数
-            if not step_scores:
-                total_score = step.get("score", test.meta["score"])
-                max_score = step.get("score", test.meta["score"])
+            if not self.step_scores:
+                self.total_score = step.get("score", test.meta["score"])
+                self.max_score = step.get("score", test.meta["score"])
 
             return TestResult(
                 success=True,
                 message="Interactive test completed successfully",
                 time=time.perf_counter() - start_time,
-                score=total_score,
-                max_score=max_score
-                if max_score > 0
+                score=self.total_score,
+                max_score=self.max_score
+                if self.max_score > 0
                 else step.get("score", test.meta["score"]),
-                step_scores=step_scores,
+                step_scores=self.step_scores,
                 error_details=None,
             )
 
         except Exception as e:
             if interactive_process:
                 interactive_process.terminate()
+            if ref_process:
+                ref_process.terminate()
 
             return TestResult(
                 success=False,
@@ -1277,7 +1185,7 @@ class TestRunner:
                 time=time.perf_counter() - start_time,
                 score=0,
                 max_score=step.get("score", test.meta["score"]),
-                step_scores=step_scores,
+                step_scores=[],
                 error_details={
                     "step": step_index,
                     "step_name": step.get("name", step["command"]),
@@ -1285,6 +1193,283 @@ class TestRunner:
                     "command": " ".join(cmd + args),
                 },
             )
+
+    def _execute_interactive_steps(
+        self,
+        test: TestCase,
+        step: Dict[str, Any],
+        step_index: int,
+        start_time: float,
+        interactive_process: InteractiveProcess,
+        ref_process: Optional[InteractiveProcess],
+        cmd: List[str],
+        args: List[str],
+    ) -> Optional[TestResult]:
+        """执行交互步骤并收集结果"""
+        # 初始化状态变量（使用属性而不是局部变量，避免nonlocal声明问题）
+        self.step_scores = []
+        self.total_score = 0
+        self.max_score = 0
+        self.previous_step_type = ""
+        self.diff_results = []  # 存储每一步的差异结果
+
+        for i, interaction_step in enumerate(step.get("steps", []), 1):
+            step_type = interaction_step.get("type", "")
+
+            # 检查超时
+            if interactive_process.check_timeout():
+                if ref_process:
+                    ref_process.terminate()
+                return TestResult(
+                    success=False,
+                    message=f"Interactive process timed out after {step.get('timeout', 30.0)}s",
+                    time=time.perf_counter() - start_time,
+                    score=self.total_score,
+                    max_score=step.get("score", test.meta["score"]),
+                    step_scores=self.step_scores,
+                    error_details={
+                        "step": step_index,
+                        "step_name": step.get("name", step["command"]),
+                        "error_message": "Process timed out",
+                        "command": " ".join(cmd + args),
+                    },
+                )
+
+            # 处理不同类型的交互步骤
+            if step_type == "input":
+                self._handle_input_step(
+                    interaction_step,
+                    interactive_process,
+                    ref_process,
+                    self.previous_step_type,
+                )
+            elif step_type == "close":
+                self._handle_close_step(interactive_process, ref_process)
+            elif step_type == "wait":
+                result = self._handle_wait_step(
+                    interaction_step,
+                    interactive_process,
+                    ref_process,
+                    test,
+                    step,
+                    step_index,
+                    start_time,
+                    cmd,
+                    args,
+                )
+                if result:
+                    return result
+            elif step_type == "sleep":
+                self._handle_sleep_step(interaction_step)
+            elif step_type == "signal":
+                self._handle_signal_step(
+                    interaction_step, interactive_process, ref_process
+                )
+            elif step_type == "check":
+                result = self._handle_check_step(
+                    i,
+                    interaction_step,
+                    interactive_process,
+                    ref_process,
+                    test,
+                    step,
+                    step_index,
+                    start_time,
+                    cmd,
+                    args,
+                )
+                if result:
+                    return result
+
+            self.previous_step_type = step_type
+
+        return None
+
+    def _handle_input_step(
+        self,
+        interaction_step: Dict[str, Any],
+        interactive_process: InteractiveProcess,
+        ref_process: Optional[InteractiveProcess],
+        previous_step_type: str,
+    ) -> None:
+        """处理输入步骤"""
+        echo = interaction_step.get("echo", True)
+        wait_for_output = interaction_step.get("wait_for_output", True)
+
+        if previous_step_type in ["signal", "sleep"]:
+            time.sleep(0.2)
+
+        # 发送输入到主进程
+        interactive_process.send_input(
+            interaction_step.get("content", ""),
+            echo=echo,
+            wait_for_output=wait_for_output,
+        )
+
+        # 如果有参考实现，也发送相同的输入
+        if ref_process:
+            ref_process.send_input(
+                interaction_step.get("content", ""),
+                echo=echo,
+                wait_for_output=wait_for_output,
+            )
+
+    def _handle_close_step(
+        self,
+        interactive_process: InteractiveProcess,
+        ref_process: Optional[InteractiveProcess],
+    ) -> None:
+        """处理关闭步骤"""
+        interactive_process.close_input()
+        if ref_process:
+            ref_process.close_input()
+
+    def _handle_wait_step(
+        self,
+        interaction_step: Dict[str, Any],
+        interactive_process: InteractiveProcess,
+        ref_process: Optional[InteractiveProcess],
+        test: TestCase,
+        step: Dict[str, Any],
+        step_index: int,
+        start_time: float,
+        cmd: List[str],
+        args: List[str],
+    ) -> Optional[TestResult]:
+        """处理等待步骤"""
+        # 等待进程终止
+        wait_timeout = interaction_step.get("timeout", 5.0)
+        exit_code = interactive_process.wait(wait_timeout)
+
+        if exit_code is None:  # 超时未终止
+            if interaction_step.get("must_terminate", True):
+                if ref_process:
+                    ref_process.terminate()
+                return TestResult(
+                    success=False,
+                    message=f"Process did not terminate within {wait_timeout}s after wait command",
+                    time=time.perf_counter() - start_time,
+                    score=self.total_score,
+                    max_score=step.get("score", test.meta["score"]),
+                    step_scores=self.step_scores,
+                    error_details={
+                        "step": step_index,
+                        "step_name": step.get("name", step["command"]),
+                        "error_message": "Process did not terminate within timeout",
+                        "command": " ".join(cmd + args),
+                    },
+                )
+
+        # 如果有参考实现，也等待它终止
+        if ref_process:
+            ref_process.wait(wait_timeout)
+
+        return None
+
+    def _handle_sleep_step(self, interaction_step: Dict[str, Any]) -> None:
+        """处理睡眠步骤"""
+        time.sleep(interaction_step.get("seconds", 1.0))
+
+    def _handle_signal_step(
+        self,
+        interaction_step: Dict[str, Any],
+        interactive_process: InteractiveProcess,
+        ref_process: Optional[InteractiveProcess],
+    ) -> None:
+        """处理信号步骤"""
+        interactive_process.send_signal(interaction_step.get("signal", "INT"))
+        if ref_process:
+            ref_process.send_signal(interaction_step.get("signal", "INT"))
+
+    def _handle_check_step(
+        self,
+        step_i: int,
+        interaction_step: Dict[str, Any],
+        interactive_process: InteractiveProcess,
+        ref_process: Optional[InteractiveProcess],
+        test: TestCase,
+        step: Dict[str, Any],
+        step_index: int,
+        start_time: float,
+        cmd: List[str],
+        args: List[str],
+    ) -> Optional[TestResult]:
+        """处理检查步骤"""
+        # 获取主进程输出
+        stdout, stderr = interactive_process.get_outputs()
+
+        # 如果有参考实现，获取它的输出并比较
+        if ref_process:
+            ref_stdout, ref_stderr = ref_process.get_outputs()
+            diff_result = self._compare_outputs(stdout, stderr, ref_stdout, ref_stderr)
+            self.diff_results.append(diff_result)
+
+        # 在no_check模式下，直接认为检查通过
+        if self.no_check:
+            step_success = True
+            message = "Check skipped in no_check mode"
+            step_score = interaction_step.get("score", 0)
+        else:
+            # 检查主进程输出
+            step_success, message, step_score = self._check_interactive_output(
+                interaction_step, stdout, stderr, test.path
+            )
+
+        step_max_score = interaction_step.get("score", 0)
+        self.max_score += step_max_score
+
+        if step_score is not None:
+            self.total_score += step_score
+            self.step_scores.append(
+                (f"Interactive step {step_i}", step_score, step_max_score)
+            )
+
+        if not step_success and interaction_step.get("must_pass", True):
+            interactive_process.terminate()
+            if ref_process:
+                ref_process.terminate()
+
+                # 如果启用了比较模式，输出差异信息
+                if self.console and not isinstance(self.console, type):
+                    self._print_diff_results(self.diff_results, step_i)
+
+            return TestResult(
+                success=False,
+                message=f"Interactive step {step_i} failed: {message}",
+                time=time.perf_counter() - start_time,
+                score=self.total_score,
+                max_score=self.max_score
+                if self.max_score > 0
+                else step.get("score", test.meta["score"]),
+                step_scores=self.step_scores,
+                error_details={
+                    "step": step_index,
+                    "step_name": step.get("name", step["command"]),
+                    "error_message": message,
+                    "command": " ".join(cmd + args),
+                },
+            )
+
+        # 检查完成后是否需要清除缓冲区
+        if interaction_step.get("clear_buffer", False) and interactive_process:
+            # 清除输出缓冲区
+            with interactive_process.output_lock:
+                interactive_process.stdout_buffer = io.StringIO()
+                interactive_process.stderr_buffer = io.StringIO()
+                interactive_process.stdout_data = ""
+                interactive_process.stderr_data = ""
+                if self.verbose:
+                    print(f"Buffer cleared after check step {step_index}")
+
+            # 如果有参考实现，也清除它的缓冲区
+            if ref_process:
+                with ref_process.output_lock:
+                    ref_process.stdout_buffer = io.StringIO()
+                    ref_process.stderr_buffer = io.StringIO()
+                    ref_process.stdout_data = ""
+                    ref_process.stderr_data = ""
+
+        return None
 
     def _check_interactive_output(
         self, step: Dict[str, Any], stdout: str, stderr: str, test_dir: Path
@@ -1299,45 +1484,144 @@ class TestRunner:
         )
         return success, message, score
 
+    def _compare_outputs(
+        self, test_stdout: str, test_stderr: str, ref_stdout: str, ref_stderr: str
+    ) -> Dict[str, Any]:
+        """比较两个进程的输出，返回差异信息"""
+        # 比较标准输出
+        stdout_diff = list(
+            difflib.unified_diff(
+                ref_stdout.splitlines(),
+                test_stdout.splitlines(),
+                fromfile="reference.stdout",
+                tofile="tested.stdout",
+                lineterm="",
+            )
+        )
+
+        # 比较标准错误
+        stderr_diff = list(
+            difflib.unified_diff(
+                ref_stderr.splitlines(),
+                test_stderr.splitlines(),
+                fromfile="reference.stderr",
+                tofile="tested.stderr",
+                lineterm="",
+            )
+        )
+
+        # 确定是否完全匹配
+        stdout_match = len(stdout_diff) == 0
+        stderr_match = len(stderr_diff) == 0
+        match = stdout_match and stderr_match
+
+        return {
+            "match": match,
+            "stdout_match": stdout_match,
+            "stderr_match": stderr_match,
+            "stdout_diff": stdout_diff,
+            "stderr_diff": stderr_diff,
+        }
+
+    def _print_diff_results(
+        self, diff_results: List[Dict[str, Any]], current_step: int
+    ):
+        """打印差异结果"""
+        if not self.console or isinstance(self.console, type):
+            return
+
+        self.console.print(
+            f"\n[bold red]Output differences found in step {current_step}:[/bold red]"
+        )
+
+        for i, diff in enumerate(diff_results, 1):
+            if not diff["match"]:
+                if not diff["stdout_match"]:
+                    self.console.print("[cyan]Standard Output Diff:[/cyan]")
+                    for line in diff["stdout_diff"]:
+                        if line.startswith("+"):
+                            self.console.print(f"[green]{line}[/green]")
+                        elif line.startswith("-"):
+                            self.console.print(f"[red]{line}[/red]")
+                        else:
+                            self.console.print(line)
+
+                if not diff["stderr_match"]:
+                    self.console.print("[cyan]Standard Error Diff:[/cyan]")
+                    for line in diff["stderr_diff"]:
+                        if line.startswith("+"):
+                            self.console.print(f"[green]{line}[/green]")
+                        elif line.startswith("-"):
+                            self.console.print(f"[red]{line}[/red]")
+                        else:
+                            self.console.print(line)
+
+            # 如果打印到当前步骤就停止
+            if i >= current_step:
+                break
+
     def _execute_single_step(
         self, test: TestCase, step: Dict[str, Any], step_index: int
     ) -> TestResult:
-        start_time = time.perf_counter()
-
-        # 在dry-run模式下，只打印命令
-        if self.dry_run:
-            cmd = [self._resolve_path(step["command"], test.path)]
-            args = [
-                self._resolve_path(str(arg), test.path) for arg in step.get("args", [])
-            ]
-            if self.console and not isinstance(self.console, type):
-                self.console.print(f"\n[bold cyan]Step {step_index}:[/bold cyan]")
-                if "name" in step:
-                    self.console.print(f"[bold]Name:[/bold] {step['name']}")
-                self.console.print(f"[bold]Command:[/bold] {' '.join(cmd + args)}")
-                if "stdin" in step:
-                    self.console.print(f"[bold]Input file:[/bold] {step['stdin']}")
-                if "check" in step and not self.no_check:
-                    self.console.print("[bold]Checks:[/bold]")
-                    for check_type, check_value in step["check"].items():
-                        if check_type == "files":
-                            check_value = [
-                                self._resolve_path(file, test.path)
-                                for file in check_value
-                            ]
-
-                        self.console.print(f"  - {check_type}: {check_value}")
-            return TestResult(
-                success=True,
-                message="Dry run",
-                time=time.perf_counter() - start_time,
-                score=0,
-                max_score=0,
-            )
-
         if "mode" in step and step["mode"] == "interactive":
             return self._execute_interactive_mode(test, step, step_index)
 
+        start_time = time.perf_counter()
+
+        # 处理dry-run模式
+        if self.dry_run:
+            return self._handle_dry_run_step(test, step, step_index, start_time)
+
+        # 执行命令
+        try:
+            process_result = self._run_command(test, step)
+
+            # 显示详细输出（如果启用）
+            self._display_verbose_output(step_index, step, process_result)
+
+            # 检查结果
+            return self._check_step_result(
+                test, step, step_index, start_time, process_result
+            )
+
+        except subprocess.TimeoutExpired:
+            return self._create_timeout_result(test, step, step_index, start_time)
+
+    def _handle_dry_run_step(
+        self, test: TestCase, step: Dict[str, Any], step_index: int, start_time: float
+    ) -> TestResult:
+        """处理dry-run模式下的步骤执行"""
+        cmd = [self._resolve_path(step["command"], test.path)]
+        args = [self._resolve_path(str(arg), test.path) for arg in step.get("args", [])]
+
+        if self.console and not isinstance(self.console, type):
+            self.console.print(f"\n[bold cyan]Step {step_index}:[/bold cyan]")
+            if "name" in step:
+                self.console.print(f"[bold]Name:[/bold] {step['name']}")
+            self.console.print(f"[bold]Command:[/bold] {' '.join(cmd + args)}")
+            if "stdin" in step:
+                self.console.print(f"[bold]Input file:[/bold] {step['stdin']}")
+            if "check" in step and not self.no_check:
+                self.console.print("[bold]Checks:[/bold]")
+                for check_type, check_value in step["check"].items():
+                    if check_type == "files":
+                        check_value = [
+                            self._resolve_path(file, test.path) for file in check_value
+                        ]
+                    self.console.print(f"  - {check_type}: {check_value}")
+
+        return TestResult(
+            success=True,
+            message="Dry run",
+            time=time.perf_counter() - start_time,
+            score=0,
+            max_score=0,
+        )
+
+    def _run_command(
+        self, test: TestCase, step: Dict[str, Any]
+    ) -> subprocess.CompletedProcess:
+        """执行命令并返回结果"""
         # 获取相对于测试目录的命令路径
         cmd = [self._resolve_path(step["command"], test.path, test.path)]
         args = [
@@ -1345,31 +1629,48 @@ class TestRunner:
             for arg in step.get("args", [])
         ]
 
-        try:
-            process = subprocess.run(
-                cmd + args,
-                cwd=test.path,
-                input=self._get_stdin_data(test, step),
-                capture_output=True,
-                text=True,
-                timeout=step.get("timeout", 5.0),
-            )
+        return subprocess.run(
+            cmd + args,
+            cwd=test.path,
+            input=self._get_stdin_data(test, step),
+            capture_output=True,
+            text=True,
+            timeout=step.get("timeout", 5.0),
+        )
 
-            # 如果启用了详细输出模式
-            if self.verbose and self.console and not isinstance(self.console, type):
-                self.console.print(f"[bold cyan]Step {step_index} Output:[/bold cyan]")
-                self.console.print("[bold]Command:[/bold]", " ".join(cmd + args))
-                if process.stdout:
-                    self.console.print("[bold]Standard Output:[/bold]")
-                    self.console.print(process.stdout)
-                if process.stderr:
-                    self.console.print("[bold]Standard Error:[/bold]")
-                    self.console.print(process.stderr)
-                self.console.print(f"[bold]Return Code:[/bold] {process.returncode}\n")
+    def _display_verbose_output(
+        self,
+        step_index: int,
+        step: Dict[str, Any],
+        process: subprocess.CompletedProcess,
+    ) -> None:
+        """显示详细的命令执行输出（如果启用了verbose模式）"""
+        if not (self.verbose and self.console and not isinstance(self.console, type)):
+            return
 
-        except subprocess.TimeoutExpired:
-            return self._create_timeout_result(test, step, step_index, start_time)
+        cmd = [step["command"]]
+        if "args" in step:
+            cmd.extend(step.get("args", []))
 
+        self.console.print(f"[bold cyan]Step {step_index} Output:[/bold cyan]")
+        self.console.print("[bold]Command:[/bold]", " ".join(cmd))
+        if process.stdout:
+            self.console.print("[bold]Standard Output:[/bold]")
+            self.console.print(process.stdout)
+        if process.stderr:
+            self.console.print("[bold]Standard Error:[/bold]")
+            self.console.print(process.stderr)
+        self.console.print(f"[bold]Return Code:[/bold] {process.returncode}\n")
+
+    def _check_step_result(
+        self,
+        test: TestCase,
+        step: Dict[str, Any],
+        step_index: int,
+        start_time: float,
+        process: subprocess.CompletedProcess,
+    ) -> TestResult:
+        """检查步骤执行结果"""
         # 在no_check模式下，只要命令执行成功就认为通过
         if self.no_check:
             return self._create_success_result(
@@ -1379,6 +1680,7 @@ class TestRunner:
                 start_time,
             )
 
+        # 如果有检查配置，执行检查
         if "check" in step:
             success, message, score = self.checker.check(
                 step,
@@ -1558,6 +1860,135 @@ class TestRunner:
             if step.get("score", 0) > 0
             else None,
         )
+
+    def _handle_dry_run_interactive(
+        self,
+        test: TestCase,
+        step: Dict[str, Any],
+        step_index: int,
+        start_time: float,
+        pwd: Path,
+        cmd: List[str],
+        args: List[str],
+    ) -> TestResult:
+        """处理交互式模式下的干运行"""
+        if self.console and not isinstance(self.console, type):
+            self.console.print(
+                f"\n[bold cyan]Interactive Step {step_index}:[/bold cyan]"
+            )
+            if "name" in step:
+                self.console.print(f"[bold]Name:[/bold] {step['name']}")
+            self.console.print(f"[bold]Command:[/bold] {' '.join(cmd + args)}")
+            self.console.print(f"[bold]Working Directory:[/bold] {pwd}")
+            self.console.print(f"[bold]Timeout:[/bold] {step.get('timeout', 30.0)}s")
+
+            # 如果启用了比较模式且有参考实现，打印参考实现的信息
+            if self.compare and "reference" in step:
+                ref_cmd = [
+                    self._resolve_path(step["reference"]["command"], test.path, pwd)
+                ]
+                ref_args = [
+                    self._resolve_path(str(arg), test.path, pwd)
+                    for arg in step["reference"].get("args", [])
+                ]
+                self.console.print(
+                    f"[bold]Reference:[/bold] {' '.join(ref_cmd + ref_args)}"
+                )
+
+            if "steps" in step:
+                self.console.print("[bold]Interactive Steps:[/bold]")
+                for i, interaction_step in enumerate(step["steps"], 1):
+                    step_type = interaction_step.get("type", "")
+                    self.console.print(f"  [bold]{i}. {step_type}[/bold]")
+
+                    if step_type == "input":
+                        self.console.print(
+                            f"    Content: {interaction_step.get('content', '')}"
+                        )
+                        self.console.print(
+                            f"    Echo: {interaction_step.get('echo', True)}"
+                        )
+                        self.console.print(
+                            f"    Wait for output: {interaction_step.get('wait_for_output', True)}"
+                        )
+                    elif step_type == "wait":
+                        self.console.print(
+                            f"    Timeout: {interaction_step.get('timeout', 5.0)}s"
+                        )
+                        self.console.print(
+                            f"    Must terminate: {interaction_step.get('must_terminate', True)}"
+                        )
+                    elif step_type == "sleep":
+                        self.console.print(
+                            f"    Seconds: {interaction_step.get('seconds', 1.0)}"
+                        )
+                    elif step_type == "signal":
+                        self.console.print(
+                            f"    Signal: {interaction_step.get('signal', 'INT')}"
+                        )
+                    elif step_type == "check":
+                        self.console.print(
+                            f"    Must pass: {interaction_step.get('must_pass', True)}"
+                        )
+                        if "score" in interaction_step:
+                            self.console.print(
+                                f"    Score: {interaction_step['score']}"
+                            )
+                        if "check" in interaction_step and not self.no_check:
+                            self.console.print("    Checks:")
+                            for check_type, check_value in interaction_step[
+                                "check"
+                            ].items():
+                                if check_type == "files":
+                                    check_value = [
+                                        self._resolve_path(file, test.path)
+                                        for file in check_value
+                                    ]
+                                self.console.print(
+                                    f"      - {check_type}: {check_value}"
+                                )
+
+        return TestResult(
+            success=True,
+            message="Dry run of interactive test",
+            time=time.perf_counter() - start_time,
+            score=0,
+            max_score=0,
+        )
+
+    def _create_interactive_processes(
+        self,
+        test: TestCase,
+        step: Dict[str, Any],
+        pwd: Path,
+        cmd: List[str],
+        args: List[str],
+    ) -> Tuple[InteractiveProcess, Optional[InteractiveProcess]]:
+        """创建交互式进程和可选的参考进程"""
+        # 创建主测试进程
+        interactive_process = InteractiveProcess(
+            cmd + args,
+            cwd=str(pwd),
+            timeout=step.get("timeout", 30.0),
+            stderr_to_stdout=step.get("stderr_to_stdout", False),
+        )
+
+        # 如果启用了比较模式且有参考实现，创建参考实现进程
+        ref_process = None
+        if self.compare and "reference" in step:
+            ref_cmd = [self._resolve_path(step["reference"]["command"], test.path, pwd)]
+            ref_args = [
+                self._resolve_path(str(arg), test.path, pwd)
+                for arg in step["reference"].get("args", [])
+            ]
+            ref_process = InteractiveProcess(
+                ref_cmd + ref_args,
+                cwd=str(pwd),
+                timeout=step.get("timeout", 30.0),
+                stderr_to_stdout=step.get("stderr_to_stdout", False),
+            )
+
+        return interactive_process, ref_process
 
 
 class ResultFormatter(ABC):
@@ -1929,6 +2360,7 @@ class Grader:
         no_check=False,
         generate_vscode=False,
         vscode_no_merge=False,
+        compare=False,
     ):
         self.config = Config(Path.cwd())
         self.verbose = verbose
@@ -1937,6 +2369,7 @@ class Grader:
         self.no_check = no_check
         self.generate_vscode = generate_vscode
         self.vscode_no_merge = vscode_no_merge
+        self.compare = compare
         self.console = Console(quiet=json_output)
         self.runner = TestRunner(
             self.config,
@@ -1944,6 +2377,7 @@ class Grader:
             verbose=self.verbose,
             dry_run=self.dry_run,
             no_check=self.no_check,
+            compare=self.compare,
         )
         self.formatter = (
             JsonFormatter() if json_output else TableFormatter(self.console)
@@ -2595,6 +3029,11 @@ def main():
         action="store_true",
         help="Overwrite existing VS Code configurations instead of merging",
     )
+    parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="Enable comparison mode to show diff with reference implementation",
+    )
     parser.add_argument("test", nargs="?", help="Specific test to run")
     args = parser.parse_args()
 
@@ -2735,6 +3174,7 @@ def main():
             verbose=args.verbose,
             generate_vscode=args.vscode,
             vscode_no_merge=args.vscode_no_merge,
+            compare=args.compare,  # 传递对拍参数
         )
         total_score, max_score = grader.run_all_tests(
             args.test, prefix_match=args.prefix, group=args.group

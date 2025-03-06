@@ -12,6 +12,10 @@ mode = "interactive"
 timeout = 20.0
 stderr_to_stdout = true
 
+[run.reference]
+command = "${root_dir}/tshref"
+args = ["-p"]
+
 # Test command not found
 [[run.steps]]
 type = "input"

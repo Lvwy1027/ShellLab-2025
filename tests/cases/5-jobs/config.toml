@@ -11,6 +11,10 @@ args = ["-p"]
 mode = "interactive"
 timeout = 15.0
 
+[run.reference]
+command = "${root_dir}/tshref"
+args = ["-p"]
+
 # Start first background job
 [[run.steps]]
 type = "input"

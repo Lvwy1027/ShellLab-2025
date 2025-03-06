@@ -12,6 +12,10 @@ mode = "interactive"
 timeout = 15.0
 stderr_to_stdout = true
 
+[run.reference]
+command = "${root_dir}/tshref"
+args = ["-p"]
+
 # Test SIGTSTP handling
 [[run.steps]]
 type = "input"
