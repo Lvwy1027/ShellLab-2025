@@ -1,0 +1,17 @@
+[meta]
+name = "Terminate on EOF Test"
+description = "Properly terminate on EOF."
+score = 10
+
+[[run]]
+name = "Run tiny shell"
+command = "${root_dir}/tsh"
+pwd = "${root_dir}"
+args = ["-p"]
+mode = "interactive"
+
+[[run.steps]]
+type = "close"
+
+[[run.steps]]
+type = "wait"

@@ -1,0 +1,65 @@
+[meta]
+name = "Process bg builtin command"
+description = "Tests the bg builtin command to resume a stopped process in the background."
+score = 10.0
+
+[[run]]
+name = "Run Shell"
+command = "${root_dir}/tsh"
+pwd = "${root_dir}"
+args = ["-p"]
+mode = "interactive"
+timeout = 30.0
+
+# Start a background job
+[[run.steps]]
+type = "input"
+content = "./myspin 4 &"
+
+# Start a foreground job
+[[run.steps]]
+type = "input"
+content = "./myspin 5"
+
+# Wait 2 seconds
+[[run.steps]]
+type = "sleep"
+seconds = 2.0
+
+# Send TSTP signal to stop the foreground job
+[[run.steps]]
+type = "signal"
+signal = "TSTP"
+
+# Check job status
+[[run.steps]]
+type = "input"
+content = "jobs"
+
+# Resume job 2 in background
+[[run.steps]]
+type = "input"
+content = "bg %2"
+
+# Verify job status changed
+[[run.steps]]
+type = "input"
+content = "jobs"
+
+# Wait for completion
+[[run.steps]]
+type = "sleep"
+seconds = 5.0
+
+# Close stdin and terminate shell
+[[run.steps]]
+type = "close"
+
+# Wait for shell to exit
+[[run.steps]]
+type = "wait"
+
+# Verify key output patterns
+[[run.steps]]
+type = "check"
+check = { special_judge = "judge.py" }

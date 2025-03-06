@@ -15,8 +15,14 @@ OBJECTS = $(patsubst $(SRCDIR)/%.c, $(BUILDDIR)/%.o, $(SOURCES))
 # Final executable name
 TARGET = tsh
 
-# Default rule to build the executable
-all: $(TARGET)
+# Additional executables
+MYINT = myint
+MYSPIN = myspin
+MYSPLIT = mysplit
+MYSTOP = mystop
+
+# Default rule to build all executables
+all: $(TARGET) $(MYINT) $(MYSPIN) $(MYSPLIT) $(MYSTOP)
 
 $(TARGET): $(OBJECTS)
 	$(CC) $(CFLAGS) -o $@ $^
@@ -26,7 +32,19 @@ $(BUILDDIR)/%.o: $(SRCDIR)/%.c
 	@mkdir -p $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(MYINT): myint.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(MYSPIN): myspin.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(MYSPLIT): mysplit.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(MYSTOP): mystop.c
+	$(CC) $(CFLAGS) -o $@ $<
+
 # Clean up build artifacts
 .PHONY: clean
 clean:
-	rm -rf $(BUILDDIR) $(TARGET)
+	rm -rf $(BUILDDIR) $(TARGET) $(MYINT) $(MYSPIN) $(MYSPLIT) $(MYSTOP)

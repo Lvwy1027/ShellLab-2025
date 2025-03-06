@@ -68,3 +68,7 @@ void eval(const char *cmdline) {
   /* Free any allocated memory for the command structure, if needed */
   /* TODO: Free command_t structure resources if dynamically allocated */
 }
+
+void eval_script(const char *filename) {
+  /* TODO: Implement script file execution */
+}

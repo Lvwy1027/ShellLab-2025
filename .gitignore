@@ -4,3 +4,8 @@ tsh
 build/
 .cache/
 .vscode/
+myint
+myspin
+mysplit
+mystop
+.test_history

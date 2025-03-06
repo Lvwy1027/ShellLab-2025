@@ -65,6 +65,7 @@ typedef struct command {
 /* Main shell functions */
 void shell_loop(int emit_prompt);
 void eval(const char *cmdline);
+void eval_script(const char *filename);
 
 /* Parsing functions */
 int parse_command_line(const char *cmdline, command_t **cmd, int *bg);

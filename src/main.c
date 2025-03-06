@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
 
   /* If a script file is provided, execute it in batch mode */
   if (script_file) {
-    /* TODO: Implement script file execution */
+    eval_script(script_file);
   } else {
     /* Run the interactive shell loop */
     shell_loop(emit_prompt);
