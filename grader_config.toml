@@ -4,15 +4,15 @@ default_type = "cpp"
 [setup]
 # 在运行测试之前需要执行的准备步骤
 
-# [[setup.steps]]
-# name = "Compile tsh"
-# type = "command"
-# command = "make"
-# args = ["all", "-j"]
-# required = true                               # 如果这一步失败，则终止所有测试
-# message = "Preparing tsh..."
-# success_message = "tsh compiled successfully"
-# timeout = 60.0
+[[setup.steps]]
+name = "Compile tsh"
+type = "command"
+command = "make"
+args = ["all", "-j"]
+required = true                               # 如果这一步失败，则终止所有测试
+message = "Preparing tsh..."
+success_message = "tsh compiled successfully"
+timeout = 60.0
 
 # 可以添加更多setup步骤
 # [[setup.steps]]
