@@ -7,6 +7,7 @@
  */
 
 #include "shell.h"
+#include <stdio.h>
 
 void shell_loop(int emit_prompt) {
   char cmdline[MAXLINE];

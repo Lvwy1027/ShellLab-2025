@@ -44,7 +44,10 @@ $(MYSPLIT): mysplit.c
 $(MYSTOP): mystop.c
 	$(CC) $(CFLAGS) -o $@ $<
 
+test:
+	python3 grader.py
+
 # Clean up build artifacts
-.PHONY: clean
+.PHONY: clean test
 clean:
 	rm -rf $(BUILDDIR) $(TARGET) $(MYINT) $(MYSPIN) $(MYSPLIT) $(MYSTOP)
