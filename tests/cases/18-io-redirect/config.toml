@@ -6,7 +6,7 @@ score = 10
 [[run]]
 name = "Run Shell"
 command = "${tsh}"
-pwd = "${root_dir}"
+pwd = "${build_dir}"
 args = ["-p"]
 mode = "interactive"
 timeout = 30.0
