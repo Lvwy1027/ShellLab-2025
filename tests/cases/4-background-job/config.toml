@@ -1,18 +1,18 @@
 [meta]
-name = "Background Job Test"
+name = "Background Job"
 description = "Run a background job and verify proper handling."
-score = 10.0
+score = 10
 
 [[run]]
 name = "Run Shell"
-command = "${root_dir}/tsh"
+command = "${tsh}"
 pwd = "${root_dir}"
 args = ["-p"]
 mode = "interactive"
 timeout = 30.0
 
 [run.reference]
-command = "${root_dir}/tshref"
+command = "${tshref}"
 args = ["-p"]
 
 # Echo the command that will be executed (this simulates what sdriver does)

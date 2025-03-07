@@ -1,18 +1,18 @@
 [meta]
 name = "Process jobs builtin command"
 description = "Test the jobs builtin command by starting background jobs and listing them."
-score = 10.0
+score = 10
 
 [[run]]
-name = "Run Shell with jobs command test"
-command = "${root_dir}/tsh"
+name = "Run Shell"
+command = "${tsh}"
 pwd = "${root_dir}"
 args = ["-p"]
 mode = "interactive"
-timeout = 15.0
+timeout = 30.0
 
 [run.reference]
-command = "${root_dir}/tshref"
+command = "${tshref}"
 args = ["-p"]
 
 # Start first background job

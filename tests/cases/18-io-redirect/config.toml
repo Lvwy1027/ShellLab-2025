@@ -1,18 +1,18 @@
 [meta]
 name = "Process I/O redirection"
 description = "Tests the basic input and output redirection functionality."
-score = 10.0
+score = 10
 
 [[run]]
-name = "Run Shell with I/O Redirection"
-command = "${root_dir}/tsh"
-pwd = "${build_dir}"
+name = "Run Shell"
+command = "${tsh}"
+pwd = "${root_dir}"
 args = ["-p"]
 mode = "interactive"
 timeout = 30.0
 
 [run.reference]
-command = "${root_dir}/tshref"
+command = "${tshref}"
 args = ["-p"]
 
 # 测试输出重定向

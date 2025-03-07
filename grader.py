@@ -197,6 +197,11 @@ class Config:
             },
         )
 
+    @property
+    def executables(self) -> Dict[str, str]:
+        """获取预定义的可执行文件配置"""
+        return self._config.get("executables", {})
+
 
 class OutputChecker(Protocol):
     def check(
@@ -441,6 +446,7 @@ class SequenceChecker:
                 pattern = pattern_item["pattern"]
                 required = pattern_item.get("required", True)
                 weight = pattern_item.get("weight", 1.0)
+                description = pattern_item.get("description", f"Pattern: {pattern}")
 
                 total_items += 1
                 total_weight += weight
@@ -461,27 +467,23 @@ class SequenceChecker:
                     matched_weight += weight
                 elif required:
                     # 必需的模式没找到
-                    errors.append(
-                        f"Required pattern not found: {pattern_item['pattern']}"
-                    )
+                    error_msg = f"Required pattern not found: {description}"
+                    errors.append(error_msg)
                     if not allow_partial:
-                        return (
-                            False,
-                            0.0,
-                            f"Required pattern not found: {pattern_item['pattern']}",
-                        )
+                        return False, 0.0, error_msg
 
             elif "unordered" in pattern_item:
                 # 无序组
                 unordered_patterns = pattern_item["unordered"]
                 required = pattern_item.get("required", True)
                 group_weight = pattern_item.get("weight", len(unordered_patterns))
+                group_description = pattern_item.get("description", "Unordered pattern group")
 
                 total_items += len(unordered_patterns)
                 total_weight += group_weight
 
                 # 处理无序组
-                result, end_pos, matched_item_count, group_matched_weight = (
+                result, end_pos, matched_item_count, group_matched_weight, unmatched_patterns = (
                     self._match_unordered_group(
                         text,
                         unordered_patterns,
@@ -502,7 +504,15 @@ class SequenceChecker:
                         )
                 elif required:
                     # 必需的无序组没找到
-                    error_msg = f"Required unordered group not fully matched: {matched_item_count}/{len(unordered_patterns)} patterns"
+                    error_msg = f"Required unordered group not fully matched: {group_description} - {matched_item_count}/{len(unordered_patterns)} patterns"
+                    
+                    # 如果有没匹配的模式，添加它们的描述
+                    if unmatched_patterns:
+                        error_msg += "\nUnmatched patterns:"
+                        for p in unmatched_patterns:
+                            p_desc = p.get("description", f"Pattern: {p.get('pattern')}")
+                            error_msg += f"\n  - {p_desc}"
+                    
                     errors.append(error_msg)
                     if not allow_partial:
                         return False, 0.0, error_msg
@@ -535,7 +545,8 @@ class SequenceChecker:
             )
         else:
             # 部分匹配但不允许部分得分，或完全不匹配
-            return False, 0.0, f"Only {matched_count}/{total_items} patterns matched"
+            error_detail = "\n".join(errors) if errors else ""
+            return False, 0.0, f"Only {matched_count}/{total_items} patterns matched\n{error_detail}"
 
     def _find_pattern(
         self, text: str, pattern: str, start_pos: int, regex_mode: bool
@@ -566,12 +577,12 @@ class SequenceChecker:
         start_pos: int,
         case_sensitive: bool,
         regex_mode: bool,
-    ) -> Tuple[bool, int, int, float]:
+    ) -> Tuple[bool, int, int, float, List[Dict[str, Any]]]:
         """
         尝试匹配无序组中的所有模式
 
         返回:
-            (是否全部匹配成功, 最后匹配位置, 匹配的模式数量, 匹配的权重总和)
+            (是否全部匹配成功, 最后匹配位置, 匹配的模式数量, 匹配的权重总和, 未匹配的模式)
         """
         # 转换模式格式和提取权重
         processed_patterns = []
@@ -579,9 +590,13 @@ class SequenceChecker:
             if isinstance(p, dict):
                 pattern = p.get("pattern", "")
                 weight = p.get("weight", 1.0)
+                # 保存原始模式对象的引用
+                original_pattern = p
             else:
                 pattern = p
                 weight = 1.0
+                # 为字符串模式创建一个简单的字典
+                original_pattern = {"pattern": p}
 
             if not case_sensitive and regex_mode:
                 pattern = f"(?i){pattern}"
@@ -589,7 +604,12 @@ class SequenceChecker:
                 pattern = pattern.lower()
 
             processed_patterns.append(
-                {"pattern": pattern, "matched": False, "weight": weight}
+                {
+                    "pattern": pattern, 
+                    "matched": False, 
+                    "weight": weight,
+                    "original": original_pattern
+                }
             )
 
         # 当前搜索范围
@@ -631,10 +651,15 @@ class SequenceChecker:
                 # 找不到更多匹配
                 break
 
+        # 收集所有未匹配的模式
+        unmatched_patterns = [
+            p["original"] for p in processed_patterns if not p["matched"]
+        ]
+
         # 检查是否所有模式都已匹配
         all_matched = matched_count == len(processed_patterns)
 
-        return all_matched, start_pos + last_match_end, matched_count, matched_weight
+        return all_matched, start_pos + last_match_end, matched_count, matched_weight, unmatched_patterns
 
 
 class CompositeChecker:
@@ -879,6 +904,7 @@ class InteractiveProcess:
 
     def print_verbose(self, console: Console):
         console.print(f"[bold cyan]Command: {' '.join(self.cmd)}[/bold cyan]")
+        console.print(f"[bold cyan]Current working directory: {self.cwd}[/bold cyan]")
         stdout, stderr = self.get_outputs()
         if stdout.strip():
             console.print("[bold cyan]Standard Output:[/bold cyan]")
@@ -941,8 +967,13 @@ class TestRunner:
                     console=self.console,
                 ) as progress:
                     total_steps = len(test.run_steps)
+                    if total_steps == 1:
+                        task_description = f"Running {test.meta['name']}..."
+                    else:
+                        task_description = f"Running {test.meta['name']} [0/{total_steps}]..."
+                    
                     task = progress.add_task(
-                        f"Running {test.meta['name']} [0/{total_steps}]...",
+                        task_description,
                         total=total_steps,
                     )
                     result = self._execute_test_steps(test, progress, task)
@@ -1029,11 +1060,22 @@ class TestRunner:
         for i, step in enumerate(test.run_steps, 1):
             if progress is not None and task is not None:
                 step_name = step.get("name", step["command"])
-                progress.update(
-                    task,
-                    description=f"Running {test.meta['name']} [{i}/{len(test.run_steps)}]: {step_name}",
-                    completed=i - 1,
-                )
+                if len(test.run_steps) == 1:
+                    progress.update(
+                        task,
+                        description=f"Running {test.meta['name']}: {step_name}",
+                        completed=i - 1,
+                    )
+                else:
+                    progress.update(
+                        task,
+                        description=f"Running {test.meta['name']} [{i}/{len(test.run_steps)}]: {step_name}",
+                        completed=i - 1,
+                    )
+                
+                # 保存当前的进度和任务，以便交互式测试使用
+                self.current_progress = progress
+                self.current_task = task
 
             result = self._execute_single_step(test, step, i)
 
@@ -1100,19 +1142,22 @@ class TestRunner:
                 test, step, step_index, start_time, pwd, cmd, args
             )
 
-        # 创建并启动交互进程
-        interactive_process, ref_process = self._create_interactive_processes(
-            test, step, pwd, cmd, args
-        )
-
+        # 创建交互式进程
         try:
-            # 启动进程
-            interactive_process.start()
-            if ref_process:
-                ref_process.start()
+            interactive_process, ref_process = self._create_interactive_processes(
+                test, step, pwd, cmd, args
+            )
 
-            # 执行交互步骤并获取结果
-            execution_result = self._execute_interactive_steps(
+            # 如果有进度条，获取当前任务描述
+            current_progress = getattr(self, "current_progress", None)
+            current_task = getattr(self, "current_task", None)
+            current_description = None
+            
+            if current_progress is not None and current_task is not None:
+                current_description = current_progress.tasks[current_task].description
+            
+            # 执行交互步骤
+            interactive_result = self._execute_interactive_steps(
                 test,
                 step,
                 step_index,
@@ -1121,45 +1166,14 @@ class TestRunner:
                 ref_process,
                 cmd,
                 args,
+                current_progress,
+                current_task,
+                current_description,
             )
 
-            if self.verbose and self.console and not isinstance(self.console, type):
-                self.console.print("[bold cyan]Interactive test finished[/bold cyan]")
-                interactive_process.print_verbose(self.console)
-                if ref_process:
-                    self.console.print("[bold]Reference program output:[/bold]")
-                    ref_process.print_verbose(self.console)
-
-            if (
-                self.compare
-                and ref_process
-                and hasattr(self, "diff_results")
-                and self.diff_results
-                and len(self.diff_results) > 0
-            ):
-                if self.console and not isinstance(self.console, type):
-                    has_diff = any(not diff["match"] for diff in self.diff_results)
-                    if has_diff:
-                        self._print_diff_results(
-                            self.diff_results, len(self.diff_results)
-                        )
-                    else:
-                        self.console.print(
-                            "\n[bold green]All outputs match with reference implementation[/bold green]"
-                        )
-
-            if execution_result:
-                return execution_result
-
-            # 确保进程终止
-            interactive_process.terminate()
-            if ref_process:
-                ref_process.terminate()
-
-            # 如果没有分步评分，使用整体分数
-            if not self.step_scores:
-                self.total_score = step.get("score", test.meta["score"])
-                self.max_score = step.get("score", test.meta["score"])
+            # 如果交互执行返回了结果，直接返回
+            if interactive_result:
+                return interactive_result
 
             return TestResult(
                 success=True,
@@ -1204,6 +1218,9 @@ class TestRunner:
         ref_process: Optional[InteractiveProcess],
         cmd: List[str],
         args: List[str],
+        current_progress: Optional[Progress] = None,
+        current_task: Optional[Any] = None,
+        current_description: Optional[str] = None,
     ) -> Optional[TestResult]:
         """执行交互步骤并收集结果"""
         # 初始化状态变量（使用属性而不是局部变量，避免nonlocal声明问题）
@@ -1212,9 +1229,38 @@ class TestRunner:
         self.max_score = 0
         self.previous_step_type = ""
         self.diff_results = []  # 存储每一步的差异结果
+        
+        # 启动进程
+        interactive_process.start()
+        if ref_process:
+            ref_process.start()
+            
+        # 交互步骤总数
+        total_interactive_steps = len(step.get("steps", []))
+        
+        # 获取步骤描述基础信息
+        step_name = step.get("name", step["command"])
+        base_description = current_description if current_description else f"Running {test.meta['name']}: {step_name}"
 
         for i, interaction_step in enumerate(step.get("steps", []), 1):
             step_type = interaction_step.get("type", "")
+            
+            # 更新进度显示，显示内部步骤进度
+            if current_progress is not None and current_task is not None and total_interactive_steps > 1:
+                step_info = f"{step_type}"
+                if step_type == "input" and "content" in interaction_step:
+                    content = interaction_step["content"]
+                    # 如果内容太长，截断显示
+                    if len(content) > 30:
+                        content = content[:27] + "..."
+                    step_info = f"input: {content}"
+                elif step_type == "signal" and "signal" in interaction_step:
+                    step_info = f"signal: {interaction_step['signal']}"
+                
+                current_progress.update(
+                    current_task,
+                    description=f"{base_description} [{i}/{total_interactive_steps}] - {step_info}"
+                )
 
             # 检查超时
             if interactive_process.check_timeout():
@@ -1282,6 +1328,48 @@ class TestRunner:
                     return result
 
             self.previous_step_type = step_type
+            
+        # 交互测试结束后，恢复原来的描述
+        if current_progress is not None and current_task is not None:
+            current_progress.update(
+                current_task,
+                description=base_description
+            )
+            
+        if self.verbose and self.console and not isinstance(self.console, type):
+            self.console.print("[bold cyan]Interactive test finished[/bold cyan]")
+            interactive_process.print_verbose(self.console)
+            if ref_process:
+                self.console.print("[bold]Reference program output:[/bold]")
+                ref_process.print_verbose(self.console)
+
+        if (
+            self.compare
+            and ref_process
+            and hasattr(self, "diff_results")
+            and self.diff_results
+            and len(self.diff_results) > 0
+        ):
+            if self.console and not isinstance(self.console, type):
+                has_diff = any(not diff["match"] for diff in self.diff_results)
+                if has_diff:
+                    self._print_diff_results(
+                        self.diff_results, len(self.diff_results)
+                    )
+                else:
+                    self.console.print(
+                        "\n[bold green]All outputs match with reference implementation[/bold green]"
+                    )
+                    
+        # 确保进程终止
+        interactive_process.terminate()
+        if ref_process:
+            ref_process.terminate()
+
+        # 如果没有分步评分，使用整体分数
+        if not self.step_scores:
+            self.total_score = step.get("score", test.meta["score"])
+            self.max_score = step.get("score", test.meta["score"])
 
         return None
 
@@ -1728,6 +1816,15 @@ class TestRunner:
     def _resolve_path(
         self, path: str, test_dir: Path, cwd: Path = os.getcwd(), relative: bool = True
     ) -> str:
+        # 检查是否是预定义的可执行文件
+        if path.startswith("${") and path.endswith("}"):
+            # 提取可执行文件名称
+            exec_name = path[2:-1]  # 去掉 ${ 和 }
+            # 检查是否在预定义的可执行文件列表中
+            if exec_name in self.config.executables:
+                # 替换为预定义的可执行文件路径
+                path = self.config.executables[exec_name]
+
         build_dir = test_dir / "build"
         build_dir.mkdir(exist_ok=True)
         if relative:

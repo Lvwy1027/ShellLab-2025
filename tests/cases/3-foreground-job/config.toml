@@ -1,18 +1,18 @@
 [meta]
 name = "Run a foreground job"
 description = "Tests the shell's ability to run a foreground job."
-score = 10.0
+score = 10
 
 [[run]]
 name = "Run Shell"
-command = "${root_dir}/tsh"
+command = "${tsh}"
 pwd = "${root_dir}"
 args = ["-p"]
 mode = "interactive"
 timeout = 30.0
 
 [run.reference]
-command = "${root_dir}/tshref"
+command = "${tshref}"
 args = ["-p"]
 
 # Run the echo command

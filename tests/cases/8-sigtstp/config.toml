@@ -1,18 +1,18 @@
 [meta]
-name = "Forward SIGTSTP Test"
+name = "Forward SIGTSTP"
 description = "Verify that SIGTSTP is forwarded only to the foreground job."
-score = 10.0
+score = 10
 
 [[run]]
-name = "Run Shell with SIGTSTP Test"
-command = "${root_dir}/tsh"
+name = "Run Shell"
+command = "${tsh}"
 pwd = "${root_dir}"
 args = ["-p"]
 mode = "interactive"
 timeout = 30.0
 
 [run.reference]
-command = "${root_dir}/tshref"
+command = "${tshref}"
 args = ["-p"]
 
 # Start a background job

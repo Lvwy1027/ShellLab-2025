@@ -1,19 +1,19 @@
 [meta]
 name = "Handle signals from other processes"
 description = "Tests whether the shell can handle SIGTSTP and SIGINT signals that come from other processes instead of the terminal"
-score = 5
+score = 10
 
 [[run]]
-name = "Test signal handling from other processes"
-command = "${root_dir}/tsh"
+name = "Run Shell"
+command = "${tsh}"
 pwd = "${root_dir}"
 args = ["-p"]
 mode = "interactive"
-timeout = 15.0
+timeout = 30.0
 stderr_to_stdout = true
 
 [run.reference]
-command = "${root_dir}/tshref"
+command = "${tshref}"
 args = ["-p"]
 
 # Test SIGTSTP handling

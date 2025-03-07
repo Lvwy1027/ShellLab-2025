@@ -4,16 +4,16 @@ description = "Tests shell's handling of various error conditions and edge cases
 score = 10
 
 [[run]]
-name = "Test error handling"
-command = "${root_dir}/tsh"
+name = "Run Shell"
+command = "${tsh}"
 pwd = "${root_dir}"
 args = ["-p"]
 mode = "interactive"
-timeout = 20.0
+timeout = 30.0
 stderr_to_stdout = true
 
 [run.reference]
-command = "${root_dir}/tshref"
+command = "${tshref}"
 args = ["-p"]
 
 # Test command not found

@@ -31,3 +31,8 @@ common_dir = "tests/common"
 [grader]
 # 评分器的全局配置
 default_timeout = 5.0 # 默认超时时间（秒）
+
+[executables]
+# 预定义的可执行文件
+tsh = "${root_dir}/tsh"
+tshref = "${root_dir}/tshref"

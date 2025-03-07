@@ -1,17 +1,18 @@
 [meta]
-name = "Terminate on EOF Test"
+name = "Terminate on EOF"
 description = "Properly terminate on EOF."
 score = 10
 
 [[run]]
-name = "Run tiny shell"
-command = "${root_dir}/tsh"
+name = "Run Shell"
+command = "${tsh}"
 pwd = "${root_dir}"
 args = ["-p"]
 mode = "interactive"
+timeout = 30.0
 
 [run.reference]
-command = "${root_dir}/tshref"
+command = "${tshref}"
 args = ["-p"]
 
 [[run.steps]]

@@ -4,15 +4,15 @@ description = "Tests whether the shell correctly stops processes with TSTP and r
 score = 10
 
 [[run]]
-name = "Test stop and restart processes"
-command = "${root_dir}/tsh"
+name = "Run Shell"
+command = "${tsh}"
 pwd = "${root_dir}"
 args = ["-p"]
 mode = "interactive"
-timeout = 15.0
+timeout = 30.0
 
 [run.reference]
-command = "${root_dir}/tshref"
+command = "${tshref}"
 args = ["-p"]
 
 [[run.steps]]

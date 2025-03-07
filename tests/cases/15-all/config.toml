@@ -4,8 +4,8 @@ description = "Comprehensive test of shell functionality including error handlin
 score = 10
 
 [[run]]
-name = "Comprehensive Shell Test"
-command = "${root_dir}/tsh"
+name = "Run Shell"
+command = "${tsh}"
 pwd = "${root_dir}"
 args = ["-p"]
 mode = "interactive"
@@ -13,7 +13,7 @@ timeout = 30.0
 stderr_to_stdout = true
 
 [run.reference]
-command = "${root_dir}/tshref"
+command = "${tshref}"
 args = ["-p"]
 
 # Test command not found
@@ -199,11 +199,6 @@ type = "input"
 content = "fg %1"
 echo = true
 wait_for_output = true
-
-# Wait for myspin to complete
-[[run.steps]]
-type = "sleep"
-seconds = 3
 
 # Test quit command
 [[run.steps]]

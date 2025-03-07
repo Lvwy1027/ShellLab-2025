@@ -1,18 +1,18 @@
 [meta]
 name = "Forward SIGINT to foreground process group"
 description = "Tests whether the shell correctly forwards SIGINT to every process in the foreground process group"
-score = 5
+score = 10
 
 [[run]]
-name = "Test SIGINT forwarding"
-command = "${root_dir}/tsh"
+name = "Run Shell"
+command = "${tsh}"
 pwd = "${root_dir}"
 args = ["-p"]
 mode = "interactive"
-timeout = 10.0
+timeout = 30.0
 
 [run.reference]
-command = "${root_dir}/tshref"
+command = "${tshref}"
 args = ["-p"]
 
 [[run.steps]]

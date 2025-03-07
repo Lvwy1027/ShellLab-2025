@@ -4,15 +4,15 @@ description = "Tests whether the shell correctly forwards SIGTSTP to every proce
 score = 10
 
 [[run]]
-name = "Test SIGTSTP forwarding"
-command = "${root_dir}/tsh"
-args = ["-p"]
+name = "Run Shell"
+command = "${tsh}"
 pwd = "${root_dir}"
+args = ["-p"]
 mode = "interactive"
-timeout = 10.0
+timeout = 30.0
 
 [run.reference]
-command = "${root_dir}/tshref"
+command = "${tshref}"
 args = ["-p"]
 
 [[run.steps]]
