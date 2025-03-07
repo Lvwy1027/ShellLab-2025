@@ -136,6 +136,31 @@ int parse_command_line(const char *cmdline, command_t **cmd, int *bg) {
   return 0;
 }
 
+void free_command(command_t *cmd) {
+  if (!cmd) {
+    return;
+  }
+
+  for (int i = 0; i < cmd->argc; i++) {
+    free(cmd->argv[i]);
+  }
+
+  if (cmd->infile) {
+    free(cmd->infile);
+  }
+  if (cmd->outfile) {
+    free(cmd->outfile);
+  }
+
+  command_t *next = cmd->next;
+
+  free(cmd);
+
+  if (next) {
+    free_command(next);
+  }
+}
+
 /*
  * get_next_token - Retrieve the next token from the input string.
  *

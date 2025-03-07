@@ -40,7 +40,6 @@ void shell_loop(int emit_prompt) {
 
 void eval(const char *cmdline) {
   command_t *cmd = NULL;
-
   int bg = 0;
 
   /* Parse the command line into a command_t structure */
@@ -50,12 +49,18 @@ void eval(const char *cmdline) {
   }
 
   /* If no command was entered, return */
-  if (cmd == NULL || cmd->argv[0] == NULL)
+  if (cmd == NULL || cmd->argv[0] == NULL) {
+    if (cmd) {
+      free_command(cmd);
+    }
     return;
+  }
 
   /* Execute built-in commands if applicable */
-  if (builtin_cmd(cmd))
+  if (builtin_cmd(cmd)) {
+    free_command(cmd);
     return;
+  }
 
   /* Execute external command(s), including handling of:
      - Process creation with proper process group management
@@ -66,8 +71,8 @@ void eval(const char *cmdline) {
      TODO: Implement execution of external commands.
   */
 
-  /* Free any allocated memory for the command structure, if needed */
-  /* TODO: Free command_t structure resources if dynamically allocated */
+  /* Free any allocated memory for the command structure */
+  free_command(cmd);
 }
 
 void eval_script(const char *filename) {
