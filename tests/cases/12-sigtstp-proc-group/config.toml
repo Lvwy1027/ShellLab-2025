@@ -23,7 +23,7 @@ wait_for_output = true
 
 [[run.steps]]
 type = "sleep"
-seconds = 2
+seconds = 1
 
 [[run.steps]]
 type = "signal"
