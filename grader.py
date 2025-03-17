@@ -15,7 +15,7 @@ import venv
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple, Union
 
 
 def create_venv(venv_path):
@@ -3168,7 +3168,7 @@ def get_current_shell() -> str:
     return "bash"
 
 
-def get_last_failed_tests(history_file: Path | str) -> List[Any]:
+def get_last_failed_tests(history_file: Union[Path, str]) -> List[Any]:
     """Get the last failed tests from the history file
 
     Args:
