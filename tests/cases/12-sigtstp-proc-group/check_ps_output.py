@@ -13,10 +13,10 @@ def check_ps_output(stdout):
     """
     lines = stdout.strip().split("\n")
 
-    # Find the section of output after "/bin/ps a" command
+    # Find the section of output after "/bin/ps ax" command
     ps_output_start = -1
     for i, line in enumerate(lines):
-        if line.strip() == "/bin/ps a" or line.strip() == "> /bin/ps a":
+        if line.strip() == "/bin/ps ax" or line.strip() == "> /bin/ps ax":
             ps_output_start = i + 1
             break
 
