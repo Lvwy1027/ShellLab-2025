@@ -268,7 +268,16 @@ static char *substitute_token(const char *token) {
 static char *env_expand(const char *token) {
   // TODO: Implement environment variable expansion.
   // For now, simply return a duplicate of the token.
-  return strdup(token);
+    if (token[0] == '$') {
+        const char *var_name = token + 1;
+        char *value = getenv(var_name);
+        if (value) {
+            return strdup(value);
+        } else {
+            return strdup(""); // Return empty string if variable not found
+        }
+    }
+    return strdup(token);
 }
 
 /*
@@ -278,8 +287,26 @@ static char *env_expand(const char *token) {
  * implement command substitution by executing the command and capturing its
  * output.
  */
-static char *command_substitute(const char *token) {
+static char *command_substitute(const char *token){
   // TODO: Implement command substitution.
   // For now, simply return a duplicate of the token.
-  return strdup(token);
+    if (strncmp(token, "$(", 2) == 0 && token[strlen(token) - 1] == ')') {
+        char command[MAXLINE];
+        strncpy(command, token + 2, strlen(token) - 3);
+        command[strlen(token) - 3] = '\0';
+
+        FILE *fp = popen(command, "r");
+        if (!fp) {
+            return strdup(""); // Return empty string on error
+        }
+
+        char result[MAXLINE];
+        fgets(result, sizeof(result), fp);
+        pclose(fp);
+
+        // Remove trailing newline
+        result[strcspn(result, "\n")] = '\0';
+        return strdup(result);
+    }
+    return strdup(token);
 }

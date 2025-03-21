@@ -120,25 +120,17 @@ int pid_to_jid(pid_t pid) {
 }
 
 void list_jobs(job_t *jobs) {
-  int i;
-
-  for (i = 0; i < MAXJOBS; i++) {
-    if (jobs[i].pid != 0) {
-      printf("[%d] (%d) ", jobs[i].jid, jobs[i].pid);
-      switch (jobs[i].state) {
-      case BG:
-        printf("Running ");
-        break;
-      case FG:
-        printf("Foreground ");
-        break;
-      case ST:
-        printf("Stopped ");
-        break;
-      default:
-        printf("listjobs: Internal error: job[%d].state=%d ", i, jobs[i].state);
-      }
-      printf("%s", jobs[i].cmdline);
+    for (int i = 0; i < MAXJOBS; i++) {
+        if (jobs[i].pid != 0) {
+            if (jobs[i].state == FG)
+                continue;  // 前台作业不在 jobs 列表中显示
+            else if (jobs[i].state == BG)
+                printf("[%d] (%d) Running %s &\n", jobs[i].jid, jobs[i].pid, jobs[i].cmdline);
+            else if (jobs[i].state == ST)
+                printf("[%d] (%d) Stopped %s\n", jobs[i].jid, jobs[i].pid, jobs[i].cmdline);
+        }
     }
-  }
 }
+
+
+
